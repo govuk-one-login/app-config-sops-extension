@@ -1,0 +1,11 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: An ECR Repository for the SOPS decrypter extension image
+Resources:
+  SopsDecrypterImageRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: appconfig-sops-decrypter-extension
+      EmptyOnDelete: true
+      ImageTagMutability: IMMUTABLE
+      EncryptionConfiguration:
+        EncryptionType: AES256
