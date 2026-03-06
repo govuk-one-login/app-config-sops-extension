@@ -1,0 +1,202 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: A deployment template for the SOPS AppConfig extension
+Parameters:
+  LambdaImage:
+    Description: "The image, including tag (and hash), to use for the decryption Lambda"
+    Type: "String"
+    Default: "275907361037.dkr.ecr.eu-west-2.amazonaws.com/appconfig-sops-decrypter-extension:v5"
+
+Resources:
+  LogsKmsKey:
+    Type: AWS::KMS::Key
+    Properties:
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              AWS: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:root"
+            Action:
+              - "kms:*"
+            Resource:
+              - "*"
+          - Effect: "Allow"
+            Principal:
+              Service: !Sub "logs.${AWS::Region}.amazonaws.com"
+            Action:
+              - "kms:Encrypt*"
+              - "kms:Decrypt*"
+              - "kms:ReEncrypt*"
+              - "kms:GenerateDataKey*"
+              - "kms:Describe*"
+            Resource:
+              - "*"
+            Condition:
+              ArnLike:
+                "kms:EncryptionContext:aws:logs:arn": !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*"
+      Tags:
+        - Key: "Name"
+          Value: !Join
+            - "-"
+            - - !Ref AWS::StackName
+              - "LogsKmsKey"
+        - Key: "Service"
+          Value: "appconfig-sops-extension"
+        - Key: "Source"
+          Value: "govuk-one-login/app-config-sops-extension/template.yaml"
+
+  SopsExtensionLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service: "lambda.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Tags:
+        - Key: "Name"
+          Value: !Join
+            - "-"
+            - - !Ref AWS::StackName
+              - "SopsExtensionLambdaRole"
+        - Key: "Service"
+          Value: "appconfig-sops-extension"
+        - Key: "Source"
+          Value: "govuk-one-login/app-config-sops-extension/template.yaml"
+
+  SopsExtensionLambdaPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName:
+        Fn::Join:
+          - "-"
+          - - !Ref AWS::StackName
+            - "SopsExtensionLambdaPolicy"
+      Roles:
+        - !Ref SopsExtensionLambdaRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Resource:
+              - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/appconfig/${AWS::StackName}-SopsExtensionLambdaLogGroup"
+              - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/appconfig/${AWS::StackName}-SopsExtensionLambdaLogGroup:*"
+            Action:
+              - "logs:CreateLogGroup"
+              - "logs:CreateLogStream"
+              - "logs:PutLogEvents"
+            Effect: "Allow"
+
+  SopsExtensionLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      KmsKeyId: !GetAtt LogsKmsKey.Arn
+      LogGroupName: !Sub "/aws/appconfig/${AWS::StackName}-SopsExtensionLambdaLogGroup"
+      RetentionInDays: 30
+      Tags:
+        - Key: "Name"
+          Value: !Join
+            - "-"
+            - - !Ref AWS::StackName
+              - "SopsExtensionLambdaLogGroup"
+        - Key: "Service"
+          Value: "appconfig-sops-extension"
+        - Key: "Source"
+          Value: "govuk-one-login/app-config-sops-extension/template.yaml"
+
+  SopsExtensionLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Architectures:
+        - arm64
+      FunctionName: !Sub "${AWS::StackName}-SopsExtensionLambda"
+      Code:
+        ImageUri: !Ref LambdaImage
+      LoggingConfig:
+        LogFormat: JSON
+        LogGroup: !Ref SopsExtensionLambdaLogGroup
+      PackageType: Image
+      Role: !GetAtt SopsExtensionLambdaRole.Arn
+      MemorySize: 1024
+      Timeout: 60
+      Tags:
+        - Key: "Name"
+          Value: !Join
+            - "-"
+            - - !Ref AWS::StackName
+              - "SopsExtensionLambda"
+        - Key: "Service"
+          Value: "appconfig-sops-extension"
+        - Key: "Source"
+          Value: "govuk-one-login/app-config-sops-extension/template.yaml"
+
+  AppConfigSopsExtensionLambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service: "appconfig.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Policies:
+        - PolicyName: "AllowAppConfigLambdaInvoke"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Resource:
+                  - !GetAtt SopsExtensionLambda.Arn
+                Action:
+                  - "lambda:InvokeFunction"
+                  - "lambda:InvokeAsync"
+                Effect: "Allow"
+      Tags:
+        - Key: "Name"
+          Value: !Join
+            - "-"
+            - - !Ref AWS::StackName
+              - "AppConfigSopsExtensionLambdaExecutionRole"
+        - Key: "Service"
+          Value: "appconfig-sops-extension"
+        - Key: "Source"
+          Value: "govuk-one-login/app-config-sops-extension/template.yaml"
+
+  AppConfigSopsExtension:
+    Type: AWS::AppConfig::Extension
+    Properties:
+      Name: !Sub "${AWS::StackName}-Sops-Decryption-Extension"
+      Description: "Decrypts SOPS Encrypted Configuration before deploying"
+      LatestVersionNumber: 0
+      Actions:
+        PRE_START_DEPLOYMENT:
+          - Name: "SOPS Decrypt"
+            Uri: !GetAtt SopsExtensionLambda.Arn
+            RoleArn: !GetAtt AppConfigSopsExtensionLambdaExecutionRole.Arn
+            Description: "Run SOPS Decrypt on configuration stream"
+      Parameters:
+        Format:
+          Required: true
+          Description: "The format of the configuration (i.e. yaml or json)"
+      Tags:
+        - Key: "Name"
+          Value: !Join
+            - "-"
+            - - !Ref AWS::StackName
+              - "AppConfigSopsExtension"
+        - Key: "Service"
+          Value: "appconfig-sops-extension"
+        - Key: "Source"
+          Value: "govuk-one-login/app-config-sops-extension/template.yaml"
+
+Outputs:
+  AppConfigSopsExtensionArn:
+    Description: >
+      The ARN of the AppConfig SOPS extension
+    Value: !GetAtt AppConfigSopsExtension.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-AppConfigSopsExtensionArn"
